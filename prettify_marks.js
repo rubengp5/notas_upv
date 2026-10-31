@@ -2,77 +2,15 @@
 const isMainPage = window.location.href.includes('sic_menu.alumno')
 
 let table, trs, elements, sorted_elements, userName
+let isSortedByMark = true
+let useAdjustedMarks = false
+let uiContainer = null
 
 // Format numbers: integers without decimals, otherwise use 2 decimals with comma
 function fmt(v) {
   if (typeof v !== 'number') v = Number(v)
-  if (isNaN(v)) return ''
-  return (Math.abs(v - Math.round(v)) < 1e-9) ? `${Math.round(v)}` : `${v.toFixed(2).replace('.', ',')}`
-}
-
-// Highlighted students helpers (stored by name in localStorage)
-function getHighlightedNames() {
-  try {
-    return JSON.parse(localStorage.getItem('notasUPV_highlighted') || '[]')
-  } catch (e) {
-    return []
-  }
-}
-
-function setHighlightedNames(arr) {
-  localStorage.setItem('notasUPV_highlighted', JSON.stringify(Array.from(new Set(arr))))
-}
-
-function isHighlighted(name) {
-  if (!name) return false
-  const arr = getHighlightedNames()
-  return arr.includes(name.trim())
-}
-
-function setHighlight(name, enabled) {
-  if (!name) return
-  const arr = getHighlightedNames()
-  const n = name.trim()
-  const idx = arr.indexOf(n)
-  if (enabled && idx === -1) {
-    arr.push(n)
-  } else if (!enabled && idx !== -1) {
-    arr.splice(idx, 1)
-  }
-  setHighlightedNames(arr)
-}
-
-
-
-function applyAllHighlights() {
-  const highlighted = getHighlightedNames()
-  trs.forEach(tr => {
-    try {
-      const tds = tr.querySelectorAll('td')
-      let name = ''
-      if (tds.length >= 3) {
-        name = tds[1]?.textContent?.trim() || ''
-      } else if (tds.length >= 1) {
-        name = tds[0]?.textContent?.trim() || ''
-      }
-
-      const isH = name && highlighted.includes(name)
-
-      // Update checkbox state if present
-      const cb = tr.querySelector('input[type="checkbox"]')
-      if (cb) cb.checked = !!isH
-
-      if (isH) {
-        tr.style.backgroundColor = '#e8f5e9'
-        tr.style.fontWeight = 'bold'
-      } else {
-        tr.style.backgroundColor = ''
-        tr.style.fontWeight = ''
-      }
-    } catch (e) {
-      // ignore
-    }
-  })
+    if (isNaN(v)) return ''
+      return (Math.abs(v - Math.round(v)) < 1e-9) ? `${Math.round(v)}` : `${v.toFixed(2).replace('.', ',')}`
 }
 
 if (isMainPage) {
@@ -84,150 +22,119 @@ if (isMainPage) {
   // Grades page logic
   table = document.querySelector('table')
   trs = [...table.querySelector('tbody').querySelectorAll('tr')]
-    ; ({ elements, sorted_elements } = getElements())
+  ;({ elements, sorted_elements } = getElements())
   userName = localStorage.getItem('notasUPV_userName')
 
   initGradesPage()
 }
 
 function getElements() {
-  let sorted_elements = trs.map(tr => {
+  // Filter out header rows embedded inside tbody
+  let validTrs = trs.filter(tr => tr.querySelectorAll('td').length >= 2)
+
+  let extracted = validTrs.map(tr => {
     let tds = tr.querySelectorAll('td')
-    // Support both original (name, mark) and new (checkbox, name, mark) layouts
-    let name = tds.length >= 3 ? tds[1].textContent : tds[0].textContent
-    let mark = tds.length >= 3 ? tds[2].textContent.replace(',', '.') : tds[1].textContent.replace(',', '.')
-    mark = mark.startsWith('.') ? '0' + mark : mark
+
+    // Offset support for cached layouts containing remnant empty/checkbox columns
+    let startIndex = 0
+    if (tds[0].querySelector('input[type="checkbox"]') || tds[0].style.width === '48px' || tds[0].textContent.trim() === '') {
+      startIndex = 1
+    }
+
+    let name = tds[startIndex].textContent
+    let markStr = tds[startIndex + 1].textContent.replace(',', '.')
+    let mark = markStr.startsWith('.') ? '0' + markStr : markStr
 
     return { name: name.trim(), mark }
   })
 
-  let elements = [...sorted_elements]
-  sorted_elements.sort((a, b) => b.mark - a.mark || a.name.localeCompare(b.name))
+  let elements = [...extracted]
+  let sorted_elements = [...extracted].sort((a, b) => b.mark - a.mark || a.name.localeCompare(b.name))
 
   return { elements, sorted_elements }
 }
 
-// Ensure table has header with empty, Nombre, Nota columns
 function ensureTableHeader() {
   if (!table) return
-  let headerRow = null
-  const thead = table.querySelector('thead')
-  if (thead) headerRow = thead.querySelector('tr')
-  if (!headerRow) {
-    const th = table.querySelector('tr th')
-    if (th) headerRow = th.closest('tr')
-  }
-  if (!headerRow) {
-    const theadEl = document.createElement('thead')
-    headerRow = document.createElement('tr')
-    theadEl.appendChild(headerRow)
-    table.insertBefore(theadEl, table.firstChild)
-  }
+    let thead = table.querySelector('thead')
+    let headerRow = null
 
-  const existing = [...headerRow.children].map(c => (c.textContent || '').trim().toLowerCase())
-
-  // Determine if we need adjusted column
-  const stats = (typeof getStats === 'function') ? getStats() : null
-  const needAdjusted = stats && stats.highestPossible && stats.highestPossible !== 10
-
-  // If header already looks like Name column present
-  if (existing[1] && existing[1].includes('nombre')) {
-    // ensure adjusted column exists if needed
-    const hasAdjusted = existing.some(t => t.includes('ajustada') || t.includes('ajust'))
-    if (needAdjusted && !hasAdjusted) {
-      const adjTh = document.createElement('th')
-      adjTh.textContent = 'Nota ajustada'
-      headerRow.appendChild(adjTh)
+    if (!thead) {
+      thead = document.createElement('thead')
+      table.insertBefore(thead, table.firstChild)
     }
-    return
-  }
 
-  while (headerRow.firstChild) headerRow.removeChild(headerRow.firstChild)
+    headerRow = thead.querySelector('tr')
+    if (!headerRow) {
+      const th = table.querySelector('tr th')
+      if (th) {
+        headerRow = th.closest('tr')
+        thead.appendChild(headerRow)
+      } else {
+        headerRow = document.createElement('tr')
+        thead.appendChild(headerRow)
+      }
+    }
 
-  const emptyTh = document.createElement('th')
-  emptyTh.textContent = ''
-  const nameTh = document.createElement('th')
-  nameTh.textContent = 'Nombre'
-  const notaTh = document.createElement('th')
-  notaTh.textContent = 'Nota'
+    const stats = getStats()
+    const needAdjusted = stats && stats.highestPossible && stats.highestPossible !== 10
 
-  // Set widths: narrow checkbox, wider note columns
-  emptyTh.style.width = '48px'
-  emptyTh.style.textAlign = 'center'
-  notaTh.style.width = '96px'
-  notaTh.style.textAlign = 'center'
+    // Fully rebuild the header row to accommodate dynamic toggling
+    while (headerRow.firstChild) headerRow.removeChild(headerRow.firstChild)
 
-  headerRow.appendChild(emptyTh)
-  headerRow.appendChild(nameTh)
-  headerRow.appendChild(notaTh)
+      const nameTh = document.createElement('th')
+      nameTh.textContent = 'Nombre'
+      const notaTh = document.createElement('th')
+      notaTh.textContent = 'Nota'
+      notaTh.style.width = '96px'
+      notaTh.style.textAlign = 'center'
 
-  if (needAdjusted) {
-    const adjTh = document.createElement('th')
-    adjTh.textContent = 'Nota ajustada'
-    adjTh.style.width = '96px'
-    adjTh.style.textAlign = 'center'
-    headerRow.appendChild(adjTh)
-  }
+      headerRow.appendChild(nameTh)
+      headerRow.appendChild(notaTh)
+
+      if (needAdjusted) {
+        const adjTh = document.createElement('th')
+        adjTh.textContent = 'Nota ajustada'
+        adjTh.style.width = '96px'
+        adjTh.style.textAlign = 'center'
+        headerRow.appendChild(adjTh)
+      }
 }
 
-function changeTable(elements) {
+function changeTable(dataElements) {
   const stats = getStats()
   const hp = stats.highestPossible
   const needsAdjusted = hp && hp !== 10
 
-  trs.forEach((tr, i) => {
+  const validTrs = trs.filter(tr => tr.querySelectorAll('td').length >= 2)
+
+  validTrs.forEach((tr, i) => {
     const name_td = document.createElement('td')
     name_td.classList.add('alignleft')
-    name_td.textContent = elements[i].name
+    name_td.textContent = dataElements[i].name
 
     const mark_td = document.createElement('td')
     mark_td.classList.add('alignleft')
-    mark_td.textContent = elements[i].mark.toString().replace('.', ',')
-
-    // Add a checkbox column to toggle highlight (narrow)
-    const checkbox_td = document.createElement('td')
-    checkbox_td.classList.add('alignleft')
-    checkbox_td.style.width = '48px'
-    checkbox_td.style.textAlign = 'center'
-    const cb = document.createElement('input')
-    cb.type = 'checkbox'
-    cb.title = 'Resaltar alumno'
-    cb.checked = isHighlighted(elements[i].name)
-    cb.addEventListener('change', function () {
-      setHighlight(elements[i].name, this.checked)
-      applyAllHighlights()
-    })
-    checkbox_td.appendChild(cb)
-
-    // Ensure nota column has fixed width and centered
+    mark_td.textContent = dataElements[i].mark.toString().replace('.', ',')
     mark_td.style.width = '96px'
     mark_td.style.textAlign = 'center'
 
-    // Adjusted grade column (scale to 10) with same width as Nota
     if (needsAdjusted) {
       const adjusted_td = document.createElement('td')
       adjusted_td.classList.add('alignleft')
       adjusted_td.style.width = '96px'
       adjusted_td.style.textAlign = 'center'
-      const raw = parseFloat(elements[i].mark)
+      const raw = parseFloat(dataElements[i].mark)
       adjusted_td.textContent = isNaN(raw) ? '' : fmt((raw / hp) * 10)
-      tr.replaceChildren(checkbox_td, name_td, mark_td, adjusted_td)
+      tr.replaceChildren(name_td, mark_td, adjusted_td)
     } else {
-      tr.replaceChildren(checkbox_td, name_td, mark_td)
+      tr.replaceChildren(name_td, mark_td)
     }
 
-    // Apply highlight styling if this student is highlighted (also handled in applyAllHighlights)
-    if (cb.checked) {
-      tr.style.backgroundColor = '#e8f5e9'
-      tr.style.fontWeight = 'bold'
-    } else {
-      tr.style.backgroundColor = ''
-      tr.style.fontWeight = ''
-    }
+    // Strip legacy highlight states if cached
+    tr.style.backgroundColor = ''
+    tr.style.fontWeight = ''
   })
-
-  // Ensure checkboxes and highlights are in sync
-  applyAllHighlights()
 }
 
 function getStats() {
@@ -238,7 +145,14 @@ function getStats() {
   const stdDev = Math.sqrt(marks.reduce((acc, m) => acc + Math.pow(m - average, 2), 0) / total)
 
   const maxObserved = marks.length ? Math.max(...marks) : 10
-  const highestPossible = Math.ceil(maxObserved)
+
+  let highestPossible = 10
+  if (useAdjustedMarks) {
+    highestPossible = Math.ceil(maxObserved)
+  } else {
+    highestPossible = Math.max(10, Math.ceil(maxObserved))
+  }
+
   const passThreshold = highestPossible * 0.5
   const sobresalienteThreshold = highestPossible * 0.9
 
@@ -288,7 +202,7 @@ function createBellCurveGraph(stats) {
 
   const normalPDF = (x, mean, std) => {
     if (std === 0) return x === mean ? 1 : 0
-    return Math.exp(-0.5 * Math.pow((x - mean) / std, 2)) / (std * Math.sqrt(2 * Math.PI))
+      return Math.exp(-0.5 * Math.pow((x - mean) / std, 2)) / (std * Math.sqrt(2 * Math.PI))
   }
 
   const points = []
@@ -298,14 +212,14 @@ function createBellCurveGraph(stats) {
     const x = minX + (i / steps) * (maxX - minX)
     const y = normalPDF(x, average, stdDev || 0.5)
     if (y > maxY) maxY = y
-    points.push({ x, y })
+      points.push({ x, y })
   }
 
   const scaleX = x => padding + ((x - minX) / (maxX - minX)) * graphWidth
   const scaleY = y => height - padding - (y / maxY) * graphHeight
 
   const pathData = points.map((p, i) =>
-    `${i === 0 ? 'M' : 'L'} ${scaleX(p.x).toFixed(1)} ${scaleY(p.y).toFixed(1)}`
+  `${i === 0 ? 'M' : 'L'} ${scaleX(p.x).toFixed(1)} ${scaleY(p.y).toFixed(1)}`
   ).join(' ')
 
   const areaPath = pathData + ` L ${scaleX(maxX)} ${height - padding} L ${scaleX(minX)} ${height - padding} Z`
@@ -315,37 +229,37 @@ function createBellCurveGraph(stats) {
     const ux = scaleX(userGrade)
     const uy = scaleY(normalPDF(userGrade, average, stdDev || 0.5))
     userMarker = `
-      <line x1="${ux}" y1="${height - padding}" x2="${ux}" y2="${uy}" stroke="#4edfff" stroke-width="2"/>
-      <circle cx="${ux}" cy="${uy}" r="4" fill="#4edfff"/>
+    <line x1="${ux}" y1="${height - padding}" x2="${ux}" y2="${uy}" stroke="#4edfff" stroke-width="2"/>
+    <circle cx="${ux}" cy="${uy}" r="4" fill="#4edfff"/>
     `
   }
 
   const avgX = scaleX(average)
   const avgMarker = `
-    <line x1="${avgX}" y1="${height - padding}" x2="${avgX}" y2="${scaleY(normalPDF(average, average, stdDev || 0.5))}" stroke="#666" stroke-width="1" stroke-dasharray="2"/>
+  <line x1="${avgX}" y1="${height - padding}" x2="${avgX}" y2="${scaleY(normalPDF(average, average, stdDev || 0.5))}" stroke="#666" stroke-width="1" stroke-dasharray="2"/>
   `
 
   return `
-    <svg width="${width}" height="${height}" style="display: block; margin: 10px auto;">
-      <line x1="${scaleX(passThreshold)}" y1="${padding}" x2="${scaleX(passThreshold)}" y2="${height - padding}" stroke="#e0e0e0" stroke-width="1" opacity="0.6"/>
-      <line x1="${scaleX(sobresalienteThreshold)}" y1="${padding}" x2="${scaleX(sobresalienteThreshold)}" y2="${height - padding}" stroke="#e0e0e0" stroke-width="1" opacity="0.6"/>
-      
-      <path d="${areaPath}" fill="#e9e9e9" opacity="0.4"/>
-      
-      <path d="${pathData}" fill="none" stroke="#666" stroke-width="2"/>
-      
-      ${avgMarker}
-      
-      ${userMarker}
-      
-      <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="#e0e0e0" stroke-width="1"/>
-      
-      <text x="${scaleX(0)}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#888">0</text>
-      <text x="${scaleX(passThreshold)}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#888">${fmt(passThreshold)}</text>
-      <text x="${scaleX(average)}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#777">μ (${average.toFixed(2).replace('.', ',')})</text>
-      <text x="${scaleX(sobresalienteThreshold)}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#888">${fmt(sobresalienteThreshold)}</text>
-      <text x="${scaleX(maxX)}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#888">${fmt(maxX)}</text>
-    </svg>
+  <svg width="${width}" height="${height}" style="display: block; margin: 10px auto;">
+  <line x1="${scaleX(passThreshold)}" y1="${padding}" x2="${scaleX(passThreshold)}" y2="${height - padding}" stroke="#e0e0e0" stroke-width="1" opacity="0.6"/>
+  <line x1="${scaleX(sobresalienteThreshold)}" y1="${padding}" x2="${scaleX(sobresalienteThreshold)}" y2="${height - padding}" stroke="#e0e0e0" stroke-width="1" opacity="0.6"/>
+
+  <path d="${areaPath}" fill="#e9e9e9" opacity="0.4"/>
+
+  <path d="${pathData}" fill="none" stroke="#666" stroke-width="2"/>
+
+  ${avgMarker}
+
+  ${userMarker}
+
+  <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="#e0e0e0" stroke-width="1"/>
+
+  <text x="${scaleX(0)}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#888">0</text>
+  <text x="${scaleX(passThreshold)}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#888">${fmt(passThreshold)}</text>
+  <text x="${scaleX(average)}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#777">μ (${average.toFixed(2).replace('.', ',')})</text>
+  <text x="${scaleX(sobresalienteThreshold)}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#888">${fmt(sobresalienteThreshold)}</text>
+  <text x="${scaleX(maxX)}" y="${height - 5}" text-anchor="middle" font-size="9" fill="#888">${fmt(maxX)}</text>
+  </svg>
   `
 }
 
@@ -354,8 +268,8 @@ function buildAndDownloadJSON() {
   const subject = subjectEl ? subjectEl.textContent.trim() : (document.title || 'notas')
   const stats = getStats()
   const students = [...sorted_elements]
-    .map(e => ({ name: e.name.trim(), grade: Number(parseFloat(e.mark).toFixed(2)) }))
-    .sort((a, b) => a.grade - b.grade)
+  .map(e => ({ name: e.name.trim(), grade: Number(parseFloat(e.mark).toFixed(2)) }))
+  .sort((a, b) => a.grade - b.grade)
 
   const pf = Number(stats.passThreshold.toFixed(2))
   const sf = Number(stats.sobresalienteThreshold.toFixed(2))
@@ -387,23 +301,22 @@ function buildAndDownloadJSON() {
   URL.revokeObjectURL(url)
 }
 
-function setupNotasUPVElement() {
+function renderUI() {
   const stats = getStats()
-  const firstName = userName ? (userName.split(',')[1]?.trim().split(' ')[0] || userName) : ''
 
   let userGradeHTML = ''
   if (stats.userGrade !== null) {
     const gradeColor = stats.userGrade >= stats.sobresalienteThreshold ? '#4CAF50' : stats.userGrade >= stats.passThreshold ? '#2196F3' : '#f44336'
     userGradeHTML = `
     <div style="display:flex; flex-direction:column; align-items:start;">
-      <p style="margin:0; padding:0; font-size: 1.2em;">Tu nota:</p>
-      <div style="font-size: 5em; font-weight: bold; color: ${gradeColor};">
-        ${stats.userGrade.toString().replace('.', ',')}
-      </div>
-      <div style="color: #666; margin: 8px 0; text-align:left; font-size: 1em;">
-        Estás en la posición <strong>${stats.userPosition}</strong> de ${stats.total} 
-        (top <strong>${100 - stats.percentile}%</strong>)
-      </div>
+    <p style="margin:0; padding:0; font-size: 1.2em;">Tu nota:</p>
+    <div style="font-size: 5em; font-weight: bold; color: ${gradeColor};">
+    ${stats.userGrade.toString().replace('.', ',')}
+    </div>
+    <div style="color: #666; margin: 8px 0; text-align:left; font-size: 1em;">
+    Estás en la posición <strong>${stats.userPosition}</strong> de ${stats.total}
+    (top <strong>${100 - stats.percentile}%</strong>)
+    </div>
     </div>
     `
   }
@@ -413,68 +326,73 @@ function setupNotasUPVElement() {
   const total = stats.total || 0
   const pct = n => total ? Math.round((n / total) * 100) : 0
 
-  let notasUPVElement = document.createElement('span')
-  notasUPVElement.innerHTML = `
-    <div style="text-align: center; margin-bottom: 12px; padding: 12px 24px; background: #f9f9f9; display:flex; flex-direction:row; align-items:center; justify-content:space-between; gap:20px;">
-      ${userGradeHTML}
-      <div style="display: flex; flex-direction: column; align-items: center; border-left: 1px solid #ddd; padding-left: 20px; margin-left: 20px;">
-      ${bellCurveGraph}
-      <div style="display: flex; justify-content: center; gap: 20px; margin: 10px 0;">
-        <div style="text-align: center;">
-          <div style="font-size: 1.3em; font-weight: bold; color: #666;">${stats.average.toFixed(2).replace('.', ',')}</div>
-          <div style="font-size: 0.8em; color: #999;">Media</div>
-        </div>
-        <div style="text-align: center;">
-          <div style="display:flex; align-items:center; justify-content:center;"><div style="font-size:1.3em; font-weight:bold; color:#f44336;">${stats.underPass}</div><div style="font-size:1.1em; color:#999; margin-left:6px;"> (${pct(stats.underPass)}%)</div></div>
-          <div style="font-size: 0.8em; color: #999;">Suspensos (&lt; ${fmt(stats.passThreshold)})</div>
-        </div>
-        <div style="text-align: center;">
-          <div style="display:flex; align-items:center; justify-content:center;"><div style="font-size:1.3em; font-weight:bold; color:#2196F3;">${stats.mid}</div><div style="font-size:1.1em; color:#999; margin-left:6px;"> (${pct(stats.mid)}%)</div></div>
-          <div style="font-size: 0.8em; color: #999;">Aprobados (${fmt(stats.passThreshold)} - ${fmt(stats.sobresalienteThreshold)})</div>
-        </div>
-        <div style="text-align: center;">
-          <div style="display:flex; align-items:center; justify-content:center;"><div style="font-size:1.3em; font-weight:bold; color:#4CAF50;">${stats.overSob}</div><div style="font-size:1.1em; color:#999; margin-left:6px;"> (${pct(stats.overSob)}%)</div></div>
-          <div style="font-size: 0.8em; color: #999;">Sobresalientes (≥ ${fmt(stats.sobresalienteThreshold)})</div>
-        </div>
-      </div>
-      </div>
-    </div>
-          <div style="display:flex; flex-direction:row; justify-content:space-between;margin-top: 10px; align-items: center; gap: 12px; margin: 12px 0;">
-        <label style="color: #666; cursor: pointer; display: flex; align-items: center; font-size: 1em;">
-          Ordenar por nota
-          <input type="checkbox" checked style="margin-left: 6px; transform: scale(1.2); cursor: pointer;">
-        </label>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <button id="notas-upv-uncheck" style="padding:6px 10px; border-radius:4px; border:1px solid #ddd; background:#fff; cursor:pointer; font-size:0.95em; margin-right:6px;">Desmarcar todo</button>
-          <button id="notas-upv-download" style="padding:6px 10px; border-radius:4px; border:1px solid #758761; background:#758761; color:white; cursor:pointer; font-size:0.95em;">Descargar JSON</button>
-        </div>
-      </div>
-    `;
+  if (!uiContainer) {
+    uiContainer = document.createElement('div')
+    table.insertAdjacentElement('beforebegin', uiContainer)
+  }
 
-  table.insertAdjacentElement('beforebegin', notasUPVElement)
+  uiContainer.innerHTML = `
+  <div style="text-align: center; margin-bottom: 12px; padding: 12px 24px; background: #f9f9f9; display:flex; flex-direction:row; align-items:center; justify-content:space-between; gap:20px;">
+  ${userGradeHTML}
+  <div style="display: flex; flex-direction: column; align-items: center; border-left: 1px solid #ddd; padding-left: 20px; margin-left: 20px;">
+  ${bellCurveGraph}
+  <div style="display: flex; justify-content: center; gap: 20px; margin: 10px 0;">
+  <div style="text-align: center;">
+  <div style="font-size: 1.3em; font-weight: bold; color: #666;">${stats.average.toFixed(2).replace('.', ',')}</div>
+  <div style="font-size: 0.8em; color: #999;">Media</div>
+  </div>
+  <div style="text-align: center;">
+  <div style="display:flex; align-items:center; justify-content:center;"><div style="font-size:1.3em; font-weight:bold; color:#f44336;">${stats.underPass}</div><div style="font-size:1.1em; color:#999; margin-left:6px;"> (${pct(stats.underPass)}%)</div></div>
+  <div style="font-size: 0.8em; color: #999;">Suspensos (&lt; ${fmt(stats.passThreshold)})</div>
+  </div>
+  <div style="text-align: center;">
+  <div style="display:flex; align-items:center; justify-content:center;"><div style="font-size:1.3em; font-weight:bold; color:#2196F3;">${stats.mid}</div><div style="font-size:1.1em; color:#999; margin-left:6px;"> (${pct(stats.mid)}%)</div></div>
+  <div style="font-size: 0.8em; color: #999;">Aprobados (${fmt(stats.passThreshold)} - ${fmt(stats.sobresalienteThreshold)})</div>
+  </div>
+  <div style="text-align: center;">
+  <div style="display:flex; align-items:center; justify-content:center;"><div style="font-size:1.3em; font-weight:bold; color:#4CAF50;">${stats.overSob}</div><div style="font-size:1.1em; color:#999; margin-left:6px;"> (${pct(stats.overSob)}%)</div></div>
+  <div style="font-size: 0.8em; color: #999;">Sobresalientes (≥ ${fmt(stats.sobresalienteThreshold)})</div>
+  </div>
+  </div>
+  </div>
+  </div>
+  <div style="display:flex; flex-direction:row; justify-content:space-between;margin-top: 10px; align-items: center; gap: 12px; margin: 12px 0;">
+  <div style="display: flex; gap: 20px;">
+  <label style="color: #666; cursor: pointer; display: flex; align-items: center; font-size: 1em;">
+  Ordenar por nota
+  <input type="checkbox" id="notas-upv-sort" ${isSortedByMark ? 'checked' : ''} style="margin-left: 6px; transform: scale(1.2); cursor: pointer;">
+  </label>
+  <label style="color: #666; cursor: pointer; display: flex; align-items: center; font-size: 1em;">
+  Calcular notas ajustadas
+  <input type="checkbox" id="notas-upv-adjusted" ${useAdjustedMarks ? 'checked' : ''} style="margin-left: 6px; transform: scale(1.2); cursor: pointer;">
+  </label>
+  </div>
+  <div style="display:flex; gap:8px; align-items:center;">
+  <button id="notas-upv-download" style="padding:6px 10px; border-radius:4px; border:1px solid #758761; background:#758761; color:white; cursor:pointer; font-size:0.95em;">Descargar JSON</button>
+  </div>
+  </div>
+  `
 
-  notasUPVElement.querySelector('input').addEventListener('change', function () {
-    this.checked ? changeTable(sorted_elements) : changeTable(elements)
+  // Attach event handlers inside wrapper
+  uiContainer.querySelector('#notas-upv-sort').addEventListener('change', function () {
+    isSortedByMark = this.checked
+    changeTable(isSortedByMark ? sorted_elements : elements)
   })
 
-  const uncheckBtn = notasUPVElement.querySelector('#notas-upv-uncheck')
-  if (uncheckBtn) {
-    uncheckBtn.addEventListener('click', function () {
-      setHighlightedNames([])
-      applyAllHighlights()
-    })
-  }
+  uiContainer.querySelector('#notas-upv-adjusted').addEventListener('change', function () {
+    useAdjustedMarks = this.checked
+    ensureTableHeader() // Re-evaluate header logic based on the state
+    renderUI() // Overwrite container dynamically
+    changeTable(isSortedByMark ? sorted_elements : elements)
+  })
 
-  const downloadBtn = notasUPVElement.querySelector('#notas-upv-download')
-  if (downloadBtn) {
-    downloadBtn.addEventListener('click', function () {
-      try {
-        buildAndDownloadJSON()
-      } catch (err) {
-        console.error('Notas UPV: error descargando JSON', err)
-      }
-    })
-  }
+  uiContainer.querySelector('#notas-upv-download').addEventListener('click', function () {
+    try {
+      buildAndDownloadJSON()
+    } catch (err) {
+      console.error('Notas UPV: error descargando JSON', err)
+    }
+  })
 }
 
 function modifyCSS() {
@@ -488,6 +406,6 @@ function modifyCSS() {
 function initGradesPage() {
   modifyCSS()
   ensureTableHeader()
-  setupNotasUPVElement()
-  changeTable(sorted_elements)
+  renderUI()
+  changeTable(isSortedByMark ? sorted_elements : elements)
 }
